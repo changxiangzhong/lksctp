@@ -636,6 +636,7 @@ redo:
 			break;
 
 		case SCTP_XMIT_RWND_FULL:
+		case SCTP_XMIT_CWND_FULL:
 			/* Send this packet. */
 			error = sctp_packet_transmit(pkt);
 
@@ -1030,6 +1031,7 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			status = sctp_packet_transmit_chunk(packet, chunk, 0);
 
 			switch (status) {
+			case SCTP_XMIT_CWND_FULL:// 3
 			case SCTP_XMIT_PMTU_FULL:
 			case SCTP_XMIT_RWND_FULL:
 			case SCTP_XMIT_NAGLE_DELAY:

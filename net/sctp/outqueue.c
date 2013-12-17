@@ -57,6 +57,14 @@
 
 #include <net/sctp/sctp.h>
 #include <net/sctp/sm.h>
+#include <net/sctp/cmt.h>
+
+#ifdef pr_debug
+	#undef pr_debug
+#endif
+
+#define pr_debug(fmt, ...) ;
+
 
 /* Declare internal functions here.  */
 static int sctp_acked(struct sctp_sackhdr *sack, __u32 tsn);
@@ -1151,6 +1159,27 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 
 	/* Grab the association's destination address list. */
 	transport_list = &asoc->peer.transport_addr_list;
+
+	cmt_debug("\n%s: %s\n", __func__, cmt_print_cwnd(transport_list));
+
+
+/*	// print association
+	cmt_debug("%s: %s\n", __func__, cmt_print_assoc(asoc));
+
+	// print what's in the retransmit queue
+	to_console = cmt_print_queued_tsn(&q->retransmit, NULL);
+	cmt_debug("%s\n", to_console);
+
+	// print what's in the queues.
+	list_for_each_entry(transport, transport_list, transports) {
+		to_console = cmt_print_queued_tsn(&transport->transmitted, transport);
+		cmt_debug("%s\n", to_console);
+	}
+
+	to_console = cmt_print_sackhdr(sack);
+	cmt_debug("%s\n", to_console);
+*/	
+	/* Print the context END */
 
 	sack_ctsn = ntohl(sack->cum_tsn_ack);
 	gap_ack_blocks = ntohs(sack->num_gap_ack_blocks);

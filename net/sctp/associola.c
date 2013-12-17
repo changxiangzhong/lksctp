@@ -60,6 +60,7 @@
 #include <net/ipv6.h>
 #include <net/sctp/sctp.h>
 #include <net/sctp/sm.h>
+#include <net/sctp/cmt.h>
 
 /* Forward declarations for internal functions. */
 static void sctp_assoc_bh_rcv(struct work_struct *work);
@@ -833,6 +834,7 @@ void sctp_assoc_control_transport(struct sctp_association *asoc,
 	int spc_state = 0;
 	bool ulp_notify = true;
 
+	pr_debug("%s: on %p, action=%d\n", __func__, transport, command);
 	/* Record the transition on the transport.  */
 	switch (command) {
 	case SCTP_TRANSPORT_UP:
@@ -1291,6 +1293,33 @@ void sctp_assoc_update(struct sctp_association *asoc,
 
 	sctp_auth_key_put(asoc->asoc_shared_key);
 	sctp_auth_asoc_init_active_key(asoc, GFP_ATOMIC);
+}
+
+struct sctp_transport*
+sctp_assoc_most_vacant_path(struct sctp_association *asoc, int threshold)
+{
+	struct sctp_transport *t, *ret = NULL;
+	int vacancy, best=-1;
+	if (threshold < 0)
+		threshold = 0;
+	list_for_each_entry(t, &asoc->peer.transport_addr_list, transports) {
+		vacancy = t->cwnd - t->flight_size;
+		if (t->state != SCTP_ACTIVE || vacancy <= threshold /*t->pathmtu/4*/)
+			continue;
+		// This is in slow-start state
+		if (t->ssthresh > t->cwnd) {
+			ret = t;
+			break;
+		}
+		if (vacancy > best) {
+			best = vacancy;
+			ret = t;	
+		}
+
+
+	}
+	cmt_debug("===>Find a most vacant path: %p\n", ret);
+	return ret;
 }
 
 /* Update the retran path for sending a retransmitted packet.

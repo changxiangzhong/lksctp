@@ -989,12 +989,22 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 			/* If there is a specified transport, use it.
 			 * Otherwise, we want to use the active path.
 			 */
-			new_transport = chunk->transport;
+			bool path_specified;
+retry:			new_transport = chunk->transport;
 			if (!new_transport ||
 			    ((new_transport->state == SCTP_INACTIVE) ||
 			     (new_transport->state == SCTP_UNCONFIRMED) ||
-			     (new_transport->state == SCTP_PF)))
-				new_transport = asoc->peer.active_path;
+			     (new_transport->state == SCTP_PF))) {
+				path_specified = false;
+				// new_transport = asoc->peer.active_path;
+				new_transport = sctp_assoc_most_vacant_path(
+						asoc, -1);
+				if (!new_transport) {// no available path
+					sctp_outq_head_data(q, chunk);
+					goto sctp_flush_out;
+				}
+			} else 
+				path_specified = true;
 			if (new_transport->state == SCTP_UNCONFIRMED)
 				continue;
 
@@ -1032,9 +1042,20 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 
 			switch (status) {
 			case SCTP_XMIT_CWND_FULL:// 3
-			case SCTP_XMIT_PMTU_FULL:
-			case SCTP_XMIT_RWND_FULL:
-			case SCTP_XMIT_NAGLE_DELAY:
+				cmt_debug("===>CWND full\n");
+				// The App didn't specify a path, so the path
+				// was chosen by us. Then we could retry with
+				// another path
+				if (!path_specified) {
+					cmt_debug("===>retry!\n");
+					goto retry;
+				}	       
+			// PMTU_FULL not likely. As sctp_packet_transmit_chunk
+			// would flush the transport and transmit the next 
+			// chunk in the queue if PMTU_FULL happens.
+			case SCTP_XMIT_PMTU_FULL://1 
+			case SCTP_XMIT_RWND_FULL://2
+			case SCTP_XMIT_NAGLE_DELAY://4
 				/* We could not append this chunk, so put
 				 * the chunk back on the output queue.
 				 */

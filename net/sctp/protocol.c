@@ -1211,6 +1211,7 @@ static int __net_init sctp_net_init(struct net *net)
 	 */
 	net->sctp.max_retrans_association	= 10;
 	net->sctp.max_retrans_path		= 5;
+	net->sctp.pf_retrans			= 5;
 	net->sctp.max_retrans_init		= 8;
 
 	/* Sendbuffer growth	    - do per-socket accounting */

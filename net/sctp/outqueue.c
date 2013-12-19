@@ -208,6 +208,31 @@ static inline int sctp_cacc_skip(struct sctp_transport *primary,
 	return 0;
 }
 
+/** CMT-SFR algorithm
+ */
+static inline int sctp_cmt_sfr_skip(struct sctp_transport *transport,
+				 __u32 tsn)
+{
+	if (!transport) { 
+//		cmt_debug("***********transport is null!***************\n");
+		dump_stack();
+		return 0;
+	}
+	// say 	1. 6 was sent through A; 789 through B. 
+	//	2. The corresponding ack is 6,[8-9]
+	//
+	// Then the B.hisfd == 9
+	// 7 is regarded as missing
+	if (transport->cmt_sfr.saw_newack &&
+			TSN_lt(tsn, transport->cmt_sfr.hisfd)) {
+//		cmt_debug("---->counter ++\n");
+		return 0;
+	}
+
+//	cmt_debug("---->eliminate unneceseary counter++!\n");
+	return 1;
+
+}
 /* Initialize an existing sctp_outq.  This does the boring stuff.
  * You still need to define handlers if you really want to DO
  * something with this structure...
@@ -922,14 +947,35 @@ static int sctp_outq_flush(struct sctp_outq *q, int rtx_timeout)
 		if (!list_empty(&q->retransmit)) {
 			if (asoc->peer.retran_path->state == SCTP_UNCONFIRMED)
 				goto sctp_flush_out;
-			if (transport == asoc->peer.retran_path)
-				goto retran;
+	//		if (transport == asoc->peer.retran_path)
+	//			goto retran;
 
 			/* Switch transports & prepare the packet.  */
 
+			struct sctp_transport *t;
 			transport = asoc->peer.retran_path;
+			int vacancy = transport->cwnd - transport->flight_size; 
 
-			if (list_empty(&transport->send_ready)) {
+			list_for_each_entry(t, &(asoc->peer.transport_addr_list), transports) {
+				int tmp_vacancy = t->cwnd - t->flight_size;
+				if (vacancy < tmp_vacancy/* && t->ssthresh > t->cwnd*/) {
+					transport = t;
+					vacancy = tmp_vacancy;
+				}
+				cmt_debug("%p.vacancy==%d\n", t, tmp_vacancy);
+			}
+			vacancy = transport->cwnd - transport->flight_size;
+			cmt_debug("choose %p as retran, pathmtu=%d, vancancy=%d", 
+					transport, transport->pathmtu,
+					vacancy);
+			// arithmetic comparison between a signed and unsigned
+			if(vacancy < 0 || vacancy < transport->pathmtu) {
+				cmt_debug("skip this round\n");
+				goto sctp_flush_out;
+			}
+	
+			// END of Balancer
+end_of_balancer:	if (list_empty(&transport->send_ready)) {
 				list_add_tail(&transport->send_ready,
 					      &transport_list);
 			}
@@ -1244,6 +1290,17 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 		}
 	}
 
+	/* CMT-SFR
+	 * On receipt of a SACK containing gap report
+	 * 	1.for each destination address d(i), initialize
+	 * 	d(i).saw_newack = false
+	 */
+	if (gap_ack_blocks) {
+		list_for_each_entry(transport, transport_list, transports) {
+			transport->cmt_sfr.saw_newack = false;
+			transport->cmt_sfr.hisfd = asoc->c.initial_tsn;
+		}
+	}
 	/* Get the highest TSN in the sack. */
 	highest_tsn = sack_ctsn;
 	if (gap_ack_blocks)
@@ -1454,6 +1511,18 @@ static void sctp_check_transmitted(struct sctp_outq *q,
 				if (!tchunk->transport)
 					migrate_bytes += sctp_data_size(tchunk);
 				forward_progress = true;
+				// TODO: For each retransmit,
+				// The tsn->transport would be set to the
+				// latest path, to which it's sent.
+				// CMT-SFR 2) for each TSN t(a) being newly
+				// ackeds
+				// set d(a).saw_newack=true;
+				// CMT-SFR 3) set highest_in_sack_for_dest
+				if (transport) {// use tchunk -> transport instead
+					transport->cmt_sfr.saw_newack = true;
+					if (TSN_lt(transport->cmt_sfr.hisfd, tsn))
+						transport->cmt_sfr.hisfd = tsn;
+				}
 				/*
 				 * SFR-CACC algorithm:
 				 * 2) If the SACK contains gap acks
@@ -1654,6 +1723,7 @@ static void sctp_mark_missing(struct sctp_outq *q,
 	char do_fast_retransmit = 0;
 	struct sctp_association *asoc = q->asoc;
 	struct sctp_transport *primary = asoc->peer.primary_path;
+	int missing_inc;
 
 	list_for_each_entry(chunk, transmitted_queue, transmitted_list) {
 
@@ -1673,10 +1743,15 @@ static void sctp_mark_missing(struct sctp_outq *q,
 			/* SFR-CACC may require us to skip marking
 			 * this chunk as missing.
 			 */
-			if (!transport || !sctp_cacc_skip(primary,
-						chunk->transport,
-						count_of_newacks, tsn)) {
-				chunk->tsn_missing_report++;
+			bool cacc = sctp_cacc_skip(primary, chunk->transport, count_of_newacks, tsn);
+			/*Apply CMT-SFR*/
+//			bool sfr = sctp_cmt_sfr_skip(chunk->transport, tsn);
+			bool sfr = false;
+			if(sfr)
+				cmt_debug("==>sfr works!\n");
+			if (!transport || !(cacc || sfr)) {
+				missing_inc = 1;
+				chunk->tsn_missing_report+= missing_inc;
 
 				pr_debug("%s: tsn:0x%x missing counter:%d\n",
 					 __func__, tsn, chunk->tsn_missing_report);
